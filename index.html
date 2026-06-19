@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>データビューア</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+<style>
+  :root {
+    --bg: #F7F8FA;
+    --surface: #FFFFFF;
+    --border: #E2E6EC;
+    --primary: #2B5FD4;
+    --primary-light: #EBF0FD;
+    --text: #1A1E27;
+    --muted: #6B7280;
+    --success: #16A34A;
+    --success-bg: #F0FDF4;
+    --tag-bg: #EEF2FF;
+    --tag-text: #3730A3;
+    --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Hiragino Sans', 'Meiryo', sans-serif; font-size: 14px; line-height: 1.6; }
+
+  /* --- Layout --- */
+  .app { display: flex; flex-direction: column; min-height: 100vh; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; height: 52px; display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 100; }
+  header h1 { font-size: 15px; font-weight: 700; color: var(--text); letter-spacing: -.2px; }
+  header .db-badge { font-size: 12px; background: var(--success-bg); color: var(--success); border: 1px solid #BBF7D0; border-radius: 20px; padding: 2px 10px; display: none; }
+  header .db-badge.show { display: inline-block; }
+
+  .main { display: flex; flex: 1; }
+  .sidebar { width: 220px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 16px 0; position: sticky; top: 52px; height: calc(100vh - 52px); overflow-y: auto; }
+  .content { flex: 1; padding: 24px; min-width: 0; }
+
+  /* --- Upload --- */
+  .upload-zone { border: 2px dashed var(--border); border-radius: 12px; background: var(--surface); padding: 60px 40px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s; }
+  .upload-zone:hover, .upload-zone.drag { border-color: var(--primary); background: var(--primary-light); }
+  .upload-zone svg { color: var(--muted); margin-bottom: 12px; }
+  .upload-zone p { color: var(--muted); font-size: 13px; }
+  .upload-zone strong { color: var(--primary); }
+  #fileInput { display: none; }
+
+  /* --- Sidebar --- */
+  .sidebar-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; padding: 0 16px 6px; }
+  .table-item { display: flex; align-items: center; justify-content: space-between; padding: 7px 16px; cursor: pointer; border-radius: 0; transition: background .15s; font-size: 13px; color: var(--text); }
+  .table-item:hover { background: var(--bg); }
+  .table-item.active { background: var(--primary-light); color: var(--primary); font-weight: 600; }
+  .table-item .count { font-size: 11px; color: var(--muted); background: var(--bg); border-radius: 10px; padding: 1px 7px; }
+  .table-item.active .count { background: #C7D7FB; color: var(--primary); }
+
+  /* --- Controls --- */
+  .controls { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
+  .controls-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .ctrl-group { display: flex; flex-direction: column; gap: 4px; }
+  .ctrl-group label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .ctrl-group select, .ctrl-group input { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--text); background: var(--bg); outline: none; transition: border-color .15s; min-width: 130px; }
+  .ctrl-group select:focus, .ctrl-group input:focus { border-color: var(--primary); background: var(--surface); }
+  .search-wrap { flex: 1; min-width: 200px; }
+  .search-wrap input { width: 100%; }
+
+  .btn { padding: 7px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: background .15s, transform .1s; }
+  .btn:active { transform: scale(.97); }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: #1E4DB0; }
+  .btn-outline { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .btn-outline:hover { background: var(--bg); }
+  .btn-success { background: var(--success); color: #fff; }
+  .btn-success:hover { background: #15803D; }
+
+  /* --- Summary --- */
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
+  .summary-card .label { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+  .summary-card .value { font-size: 24px; font-weight: 700; color: var(--text); letter-spacing: -1px; }
+  .summary-card .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* --- Table --- */
+  .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .table-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .table-header .info { font-size: 13px; color: var(--muted); }
+  .table-header .info strong { color: var(--text); }
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { background: var(--bg); padding: 9px 12px; text-align: left; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); white-space: nowrap; cursor: pointer; user-select: none; }
+  thead th:hover { color: var(--primary); }
+  thead th.sort-asc::after { content: ' ↑'; }
+  thead th.sort-desc::after { content: ' ↓'; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--primary-light); }
+  td { padding: 8px 12px; color: var(--text); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.null { color: var(--muted); font-style: italic; }
+
+  .tag { display: inline-block; font-size: 11px; background: var(--tag-bg); color: var(--tag-text); border-radius: 4px; padding: 1px 7px; font-weight: 600; }
+
+  /* --- Pagination --- */
+  .pagination { display: flex; align-items: center; gap: 6px; padding: 12px 16px; border-top: 1px solid var(--border); }
+  .pagination .page-info { font-size: 12px; color: var(--muted); margin-right: auto; }
+  .page-btn { width: 30px; height: 30px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; transition: background .1s; }
+  .page-btn:hover { background: var(--bg); }
+  .page-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 700; }
+  .page-btn:disabled { opacity: .4; cursor: default; }
+
+  /* --- Empty / Loading --- */
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty svg { margin-bottom: 12px; opacity: .4; }
+  .loading { text-align: center; padding: 40px; color: var(--muted); }
+
+  /* --- Toast --- */
+  .toast { position: fixed; bottom: 24px; right: 24px; background: #1A1E27; color: #fff; border-radius: 8px; padding: 10px 16px; font-size: 13px; transform: translateY(20px); opacity: 0; transition: all .25s; pointer-events: none; z-index: 999; }
+  .toast.show { transform: translateY(0); opacity: 1; }
+
+  @media (max-width: 700px) {
+    .sidebar { display: none; }
+    .content { padding: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2B5FD4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+    <h1>データビューア</h1>
+    <span id="dbBadge" class="db-badge"></span>
+    <div style="margin-left:auto; display:flex; gap:8px;">
+      <button class="btn btn-outline" id="changeFileBtn" style="display:none" onclick="document.getElementById('fileInput').click()">ファイルを変更</button>
+      <button class="btn btn-success" id="exportBtn" style="display:none" onclick="exportCSV()">CSVダウンロード</button>
+    </div>
+    <input type="file" id="fileInput" accept=".sqlite,.db,.sqlite3" onchange="loadFile(this)">
+  </header>
+
+  <div class="main">
+    <nav class="sidebar" id="sidebar">
+      <div style="padding: 0 16px 12px;">
+        <div class="sidebar-label">テーブル一覧</div>
+      </div>
+      <div id="tableList"></div>
+    </nav>
+
+    <div class="content" id="mainContent">
+      <!-- Upload zone -->
+      <div id="uploadArea">
+        <div class="upload-zone" id="dropZone" onclick="document.getElementById('fileInput').click()" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <p style="margin-bottom:6px; font-size:15px; font-weight:600; color:#1A1E27;">SQLiteファイルをアップロード</p>
+          <p><strong>.sqlite / .db</strong> ファイルをドロップするか、クリックして選択してください</p>
+          <p style="margin-top:8px; font-size:12px;">ファイルはブラウザ内だけで処理されます（外部送信なし）</p>
+        </div>
+      </div>
+
+      <!-- Main viewer -->
+      <div id="viewerArea" style="display:none">
+        <div id="summaryGrid" class="summary-grid"></div>
+        <div class="controls" id="controls">
+          <div class="controls-row" id="filterRow"></div>
+        </div>
+        <div class="table-wrap">
+          <div class="table-header">
+            <span class="info" id="tableInfo"></span>
+          </div>
+          <div class="table-scroll">
+            <table id="dataTable">
+              <thead id="tableHead"></thead>
+              <tbody id="tableBody"></tbody>
+            </table>
+            <div id="emptyState" class="empty" style="display:none">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <p>条件に一致するデータがありません</p>
+            </div>
+          </div>
+          <div class="pagination" id="pagination"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let db = null;
+let currentTable = null;
+let allColumns = [];
+let currentPage = 1;
+const PAGE_SIZE = 50;
+let sortCol = null;
+let sortDir = 'asc';
+let filterValues = {};
+let searchVal = '';
+let searchCol = '__all__';
+let totalRows = 0;
+let filterOptions = {}; // column -> distinct values
+
+// ---- File loading ----
+function loadFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => initDB(e.target.result, file.name);
+  reader.readAsArrayBuffer(file);
+}
+
+function onDragOver(e) { e.preventDefault(); document.getElementById('dropZone').classList.add('drag'); }
+function onDragLeave(e) { document.getElementById('dropZone').classList.remove('drag'); }
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropZone').classList.remove('drag');
+  const file = e.dataTransfer.files[0];
+  if (file) { const fr = new FileReader(); fr.onload = ev => initDB(ev.target.result, file.name); fr.readAsArrayBuffer(file); }
+}
+
+function initDB(buffer, fileName) {
+  try {
+    const SQL = window.SQL;
+    if (!SQL) { showToast('sql.js の読み込みを待っています…'); return; }
+    const arr = new Uint8Array(buffer);
+    db = new SQL.Database(arr);
+    document.getElementById('uploadArea').style.display = 'none';
+    document.getElementById('viewerArea').style.display = 'block';
+    document.getElementById('changeFileBtn').style.display = 'inline-flex';
+    const badge = document.getElementById('dbBadge');
+    badge.textContent = fileName;
+    badge.classList.add('show');
+    loadTables();
+    showToast('読み込み完了: ' + fileName);
+  } catch(e) { showToast('読み込みエラー: ' + e.message); }
+}
+
+// ---- Table list ----
+function loadTables() {
+  const res = db.exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
+  const tables = res[0]?.values.map(r => r[0]) || [];
+  const list = document.getElementById('tableList');
+  list.innerHTML = '';
+  tables.forEach(t => {
+    const cnt = db.exec(`SELECT COUNT(*) FROM "${t}"`)[0]?.values[0][0] || 0;
+    const div = document.createElement('div');
+    div.className = 'table-item';
+    div.innerHTML = `<span>${t}</span><span class="count">${cnt.toLocaleString()}</span>`;
+    div.onclick = () => selectTable(t);
+    list.appendChild(div);
+  });
+  if (tables.length > 0) selectTable(tables[0]);
+}
+
+function selectTable(name) {
+  currentTable = name;
+  currentPage = 1;
+  sortCol = null;
+  filterValues = {};
+  searchVal = '';
+  searchCol = '__all__';
+  document.querySelectorAll('.table-item').forEach(el => {
+    el.classList.toggle('active', el.querySelector('span').textContent === name);
+  });
+  loadColumns();
+  buildFilterUI();
+  renderSummary();
+  renderTable();
+  document.getElementById('exportBtn').style.display = 'inline-flex';
+}
+
+function loadColumns() {
+  const res = db.exec(`PRAGMA table_info("${currentTable}")`);
+  allColumns = res[0]?.values.map(r => ({ name: r[1], type: r[2] })) || [];
+}
+
+// ---- Summary ----
+function renderSummary() {
+  const total = db.exec(`SELECT COUNT(*) FROM "${currentTable}"`)[0]?.values[0][0] || 0;
+  const cards = [{ label: '総件数', value: total.toLocaleString(), sub: 'レコード' }];
+
+  // 対象月カラム
+  const monthCol = allColumns.find(c => c.name === '対象月');
+  if (monthCol) {
+    const months = db.exec(`SELECT COUNT(DISTINCT 対象月) FROM "${currentTable}"`)[0]?.values[0][0] || 0;
+    cards.push({ label: '対象月数', value: months, sub: 'ヶ月分' });
+  }
+
+  // 手段カラム
+  const handanCol = allColumns.find(c => c.name === '手段');
+  if (handanCol) {
+    const types = db.exec(`SELECT 手段, COUNT(*) as cnt FROM "${currentTable}" GROUP BY 手段 ORDER BY cnt DESC LIMIT 3`)[0];
+    if (types) types.values.forEach(r => cards.push({ label: r[0] || '(未設定)', value: Number(r[1]).toLocaleString(), sub: '件' }));
+  }
+
+  document.getElementById('summaryGrid').innerHTML = cards.map(c =>
+    `<div class="summary-card"><div class="label">${c.label}</div><div class="value">${c.value}</div><div class="sub">${c.sub}</div></div>`
+  ).join('');
+}
+
+// ---- Filter UI ----
+function buildFilterUI() {
+  filterOptions = {};
+  const row = document.getElementById('filterRow');
+  row.innerHTML = '';
+
+  // 特定カラムにドロップダウンフィルタを出す
+  const dropdownCols = allColumns.filter(c => ['対象月','手段','ステータス','キャリア'].includes(c.name));
+  dropdownCols.forEach(col => {
+    const res = db.exec(`SELECT DISTINCT "${col.name}" FROM "${currentTable}" WHERE "${col.name}" IS NOT NULL ORDER BY "${col.name}"`);
+    const vals = res[0]?.values.map(r => r[0]) || [];
+    filterOptions[col.name] = vals;
+    const g = document.createElement('div');
+    g.className = 'ctrl-group';
+    g.innerHTML = `<label>${col.name}</label>
+      <select onchange="onFilter('${col.name}', this.value)">
+        <option value="">すべて</option>
+        ${vals.map(v => `<option value="${v}">${v}</option>`).join('')}
+      </select>`;
+    row.appendChild(g);
+  });
+
+  // 検索列選択 + 検索ボックス
+  const colOptions = allColumns.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+  const scg = document.createElement('div');
+  scg.className = 'ctrl-group';
+  scg.innerHTML = `<label>検索対象列</label>
+    <select id="searchColSelect" onchange="onSearchColChange(this.value)">
+      <option value="__all__">すべての列</option>
+      ${colOptions}
+    </select>`;
+  row.appendChild(scg);
+
+  const sg = document.createElement('div');
+  sg.className = 'ctrl-group search-wrap';
+  sg.innerHTML = `<label>キーワード</label>
+    <input type="text" placeholder="検索キーワードを入力..." oninput="onSearch(this.value)" value="${searchVal}">`;
+  row.appendChild(sg);
+
+  // リセットボタン
+  const bg = document.createElement('div');
+  bg.className = 'ctrl-group';
+  bg.innerHTML = `<label>&nbsp;</label><button class="btn btn-outline" onclick="resetFilters()">リセット</button>`;
+  row.appendChild(bg);
+}
+
+function onFilter(col, val) { filterValues[col] = val; currentPage = 1; renderTable(); }
+function onSearch(val) { searchVal = val; currentPage = 1; renderTable(); }
+function onSearchColChange(val) { searchCol = val; currentPage = 1; renderTable(); }
+function resetFilters() {
+  filterValues = {}; searchVal = ''; searchCol = '__all__'; currentPage = 1;
+  document.querySelectorAll('#filterRow select').forEach(s => s.value = s.id === 'searchColSelect' ? '__all__' : '');
+  document.querySelectorAll('#filterRow input[type=text]').forEach(i => i.value = '');
+  renderTable();
+}
+
+// ---- WHERE clause builder ----
+function buildWhere() {
+  const parts = [];
+  for (const [col, val] of Object.entries(filterValues)) {
+    if (val !== '') parts.push(`"${col}" = '${val.replace(/'/g, "''")}'`);
+  }
+  if (searchVal.trim()) {
+    const s = searchVal.trim().replace(/'/g, "''");
+    const targetCols = (searchCol && searchCol !== '__all__')
+      ? allColumns.filter(c => c.name === searchCol)
+      : allColumns;
+    const textCols = targetCols.map(c => `CAST("${c.name}" AS TEXT) LIKE '%${s}%'`);
+    parts.push(`(${textCols.join(' OR ')})`);
+  }
+  return parts.length ? 'WHERE ' + parts.join(' AND ') : '';
+}
+
+// ---- Table render ----
+function renderTable() {
+  const where = buildWhere();
+  const countRes = db.exec(`SELECT COUNT(*) FROM "${currentTable}" ${where}`);
+  totalRows = countRes[0]?.values[0][0] || 0;
+
+  const orderBy = sortCol ? `ORDER BY "${sortCol}" ${sortDir.toUpperCase()}` : '';
+  const offset = (currentPage - 1) * PAGE_SIZE;
+  const res = db.exec(`SELECT * FROM "${currentTable}" ${where} ${orderBy} LIMIT ${PAGE_SIZE} OFFSET ${offset}`);
+  const rows = res[0]?.values || [];
+  const cols = res[0]?.columns || allColumns.map(c => c.name);
+
+  // Head
+  const thead = document.getElementById('tableHead');
+  thead.innerHTML = `<tr>${cols.map(c => {
+    const cls = sortCol === c ? `sort-${sortDir}` : '';
+    return `<th class="${cls}" onclick="onSort('${c}')">${c}</th>`;
+  }).join('')}</tr>`;
+
+  // Body
+  const tbody = document.getElementById('tableBody');
+  if (rows.length === 0) {
+    tbody.innerHTML = '';
+    document.getElementById('emptyState').style.display = 'block';
+  } else {
+    document.getElementById('emptyState').style.display = 'none';
+    tbody.innerHTML = rows.map(row =>
+      `<tr>${row.map(cell => {
+        if (cell === null || cell === undefined) return `<td class="null">—</td>`;
+        const s = String(cell);
+        // タグ表示
+        if (['メール','郵送','メール不通'].includes(s)) return `<td><span class="tag">${s}</span></td>`;
+        return `<td title="${s.replace(/"/g,'&quot;')}">${s.length > 40 ? s.slice(0,40)+'…' : s}</td>`;
+      }).join('')}</tr>`
+    ).join('');
+  }
+
+  // Info
+  const start = offset + 1;
+  const end = Math.min(offset + PAGE_SIZE, totalRows);
+  document.getElementById('tableInfo').innerHTML =
+    totalRows > 0
+      ? `<strong>${start}–${end}</strong> / ${totalRows.toLocaleString()} 件`
+      : '0 件';
+
+  renderPagination();
+}
+
+function onSort(col) {
+  if (sortCol === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+  else { sortCol = col; sortDir = 'asc'; }
+  currentPage = 1;
+  renderTable();
+}
+
+// ---- Pagination ----
+function renderPagination() {
+  const total = Math.ceil(totalRows / PAGE_SIZE);
+  const pg = document.getElementById('pagination');
+  if (total <= 1) { pg.innerHTML = ''; return; }
+
+  let html = `<span class="page-info">${currentPage} / ${total} ページ</span>`;
+  html += `<button class="page-btn" onclick="goPage(${currentPage-1})" ${currentPage===1?'disabled':''}>‹</button>`;
+
+  const pages = getPageRange(currentPage, total);
+  pages.forEach(p => {
+    if (p === '...') html += `<span style="padding:0 4px;color:var(--muted)">…</span>`;
+    else html += `<button class="page-btn ${p===currentPage?'active':''}" onclick="goPage(${p})">${p}</button>`;
+  });
+
+  html += `<button class="page-btn" onclick="goPage(${currentPage+1})" ${currentPage===total?'disabled':''}>›</button>`;
+  pg.innerHTML = html;
+}
+
+function getPageRange(cur, total) {
+  if (total <= 7) return Array.from({length: total}, (_,i) => i+1);
+  if (cur <= 4) return [1,2,3,4,5,'...',total];
+  if (cur >= total-3) return [1,'...',total-4,total-3,total-2,total-1,total];
+  return [1,'...',cur-1,cur,cur+1,'...',total];
+}
+
+function goPage(p) { currentPage = p; renderTable(); window.scrollTo(0,0); }
+
+// ---- CSV Export ----
+function exportCSV() {
+  const where = buildWhere();
+  const orderBy = sortCol ? `ORDER BY "${sortCol}" ${sortDir.toUpperCase()}` : '';
+  const res = db.exec(`SELECT * FROM "${currentTable}" ${where} ${orderBy}`);
+  if (!res[0]) return;
+  const cols = res[0].columns;
+  const rows = res[0].values;
+  const BOM = '\uFEFF';
+  const csv = BOM + [cols.join(','), ...rows.map(r => r.map(c => {
+    if (c === null || c === undefined) return '';
+    const s = String(c);
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g,'""')}"` : s;
+  }).join(','))].join('\r\n');
+  const blob = new Blob([csv], {type: 'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${currentTable}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  showToast(`${rows.length.toLocaleString()} 件をCSVでダウンロードしました`);
+}
+
+// ---- Toast ----
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// ---- Init sql.js ----
+window.addEventListener('load', () => {
+  initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}` })
+    .then(SQL => { window.SQL = SQL; })
+    .catch(e => showToast('sql.js 読み込み失敗: ' + e));
+});
+</script>
+</body>
+</html>
